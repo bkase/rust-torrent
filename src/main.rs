@@ -1,7 +1,8 @@
-#[macro_use]
-extern crate nom;
+#[macro_use] extern crate nom;
+extern crate url;
 
 mod bencode;
+mod metainfo;
 
 use bencode::BVal;
 

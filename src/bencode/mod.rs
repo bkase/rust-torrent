@@ -61,7 +61,7 @@ fn bstring_str(chars: &[u8]) -> IResult<&[u8], &str> {
     }
 }
 
-fn bstring(chars: &[u8]) -> IResult<&[u8], BVal> {
+pub fn bstring(chars: &[u8]) -> IResult<&[u8], BVal> {
     match bstring_str(chars) {
         IResult::Done(rest, s) => IResult::Done(rest, BVal::BString(s)),
         IResult::Error(e) => IResult::Error(e),
@@ -69,17 +69,16 @@ fn bstring(chars: &[u8]) -> IResult<&[u8], BVal> {
     }
 }
 
-named!(bint<BVal>,
+named!(pub bint<BVal>,
        chain!(
            tag!("i") ~
-           // TODO: Do this for real
            n: num ~
            tag!("e") ,
            ||{ BVal::BInt(n) }
        )
 );
 
-named!(blist<BVal>,
+named!(pub blist<BVal>,
        chain!(
            tag!("l") ~
            bvs: many0!(bval) ~
@@ -88,7 +87,7 @@ named!(blist<BVal>,
        )
 );
 
-named!(bdict<BVal>,
+named!(pub bdict<BVal>,
        chain!(
            tag!("d") ~
            kvs: many0!(keyvalpair) ~
