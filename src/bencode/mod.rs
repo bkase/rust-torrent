@@ -1,15 +1,58 @@
 use std::str;
 use std::str::FromStr;
-use std::result::Result;
 use std::collections::HashMap;
 use nom::{IResult, Needed, is_digit, Err};
 
 #[derive(Debug, PartialEq)]
 pub enum BVal<'a> {
-    BString(&'a str),
+    BString(&'a [u8]),
     BInt(i64),
     BList(Vec<BVal<'a>>),
     BDict(HashMap<&'a str, BVal<'a>>),
+}
+
+impl <'a, 'b: 'a> BVal<'a> {
+    pub fn as_bstring_str(&self) -> Option<&'a str> {
+        match self {
+            &BVal::BString(bs) => str::from_utf8(bs).ok(),
+            _ => None,
+        }
+    }
+
+    pub fn as_bstring_bytes(&self) -> Option<&'a [u8]> {
+        match self {
+            &BVal::BString(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_bint(&self) -> Option<i64> {
+        match self {
+            &BVal::BInt(i) => Some(i),
+            _ => None,
+        }
+    }
+
+    pub fn as_blist(&self) -> Option<&Vec<BVal<'a>>> {
+        match *self {
+            BVal::BList(ref v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_bdict_ref(&self) -> Option<&HashMap<&'a str, BVal<'a>>> {
+        match *self {
+            BVal::BDict(ref m) => Some(m),
+            _ => None,
+        }
+    }
+
+    pub fn as_bdict(self) -> Option<HashMap<&'a str, BVal<'a>>> {
+        match self {
+            BVal::BDict(m) => Some(m),
+            _ => None,
+        }
+    }
 }
 
 /*
@@ -44,14 +87,11 @@ named!(bstring_prelude<usize>,
        )
 );
 
-fn bstring_str(chars: &[u8]) -> IResult<&[u8], &str> {
+fn bstring_bytes(chars: &[u8]) -> IResult<&[u8], &[u8]> {
     match bstring_prelude(chars) {
         IResult::Done(rest, n) => {
           if rest.len() >= n {
-            match str::from_utf8(&rest[..n]) {
-                Result::Ok(bv) => IResult::Done(&rest[n..], bv),
-                Result::Err(_) => panic!("TODO: handle error"),
-            }
+            IResult::Done(&rest[n..], &rest[..n])
           } else {
             IResult::Incomplete(Needed::Size(n))
           }
@@ -62,7 +102,7 @@ fn bstring_str(chars: &[u8]) -> IResult<&[u8], &str> {
 }
 
 pub fn bstring(chars: &[u8]) -> IResult<&[u8], BVal> {
-    match bstring_str(chars) {
+    match bstring_bytes(chars) {
         IResult::Done(rest, s) => IResult::Done(rest, BVal::BString(s)),
         IResult::Error(e) => IResult::Error(e),
         IResult::Incomplete(n) => IResult::Incomplete(n),
@@ -98,7 +138,7 @@ named!(pub bdict<BVal>,
 
 named!(keyvalpair<(&str, BVal)>,
        chain!(
-           key: bstring_str ~
+           key: map_res!(bstring_bytes, str::from_utf8) ~
            val: bval ,
            ||{ (key, val) }
        )
@@ -128,7 +168,7 @@ mod tests {
 
     #[test]
     fn bval_string() {
-        assert_eq!(bval(&b"5:abcde"[..]), done(BVal::BString("abcde")));
+        assert_eq!(bval(&b"5:abcde"[..]), done(BVal::BString(&b"abcde"[..])));
     }
 
     #[test]
@@ -153,10 +193,23 @@ mod tests {
         assert_eq!(bval(&b"d3:key5:value4:key2i10ee"[..]), done(
                 BVal::BDict(
                     vec![
-                        ("key", BVal::BString("value")),
+                        ("key", BVal::BString(&b"value"[..])),
                         ("key2", BVal::BInt(10)),
                     ].into_iter().collect()
                 ))
+        );
+    }
+
+    #[test]
+    fn option_variant() {
+        assert_eq!(
+            BVal::BString(&b"hello"[..]).as_bstring_str(),
+            Some("hello")
+        );
+
+        assert_eq!(
+            BVal::BInt(10).as_bstring_str(),
+            None
         );
     }
 }
