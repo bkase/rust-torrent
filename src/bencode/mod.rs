@@ -1,5 +1,6 @@
 use std::str;
-use std::str::FromStr;
+use std::str::{FromStr, Utf8Error};
+use std::result::Result;
 use std::collections::HashMap;
 use nom::{IResult, Needed, is_digit, Err};
 
@@ -11,46 +12,67 @@ pub enum BVal<'a> {
     BDict(HashMap<&'a str, BVal<'a>>),
 }
 
+#[derive(Debug, PartialEq)]
+pub enum ReadError {
+    WrongType{found: &'static str, expected: &'static str},
+    BadString(Utf8Error),
+}
+
+pub static BSTRING_TYPE_NAME: &'static str = "BString";
+pub static BINT_TYPE_NAME: &'static str = "BInt";
+pub static BLIST_TYPE_NAME: &'static str = "BList";
+pub static BDICT_TYPE_NAME: &'static str = "BDict";
+
 impl <'a, 'b: 'a> BVal<'a> {
-    pub fn as_bstring_str(&self) -> Option<&'a str> {
+    fn report<T>(&self, expected: &'static str) -> Result<T, ReadError> {
         match self {
-            &BVal::BString(bs) => str::from_utf8(bs).ok(),
-            _ => None,
+            &BVal::BString(_) => Err(ReadError::WrongType{found: BSTRING_TYPE_NAME, expected: expected}),
+            &BVal::BInt(_) => Err(ReadError::WrongType{found: BINT_TYPE_NAME, expected: expected}),
+            &BVal::BList(_) => Err(ReadError::WrongType{found: BLIST_TYPE_NAME, expected: expected}),
+            &BVal::BDict(_) => Err(ReadError::WrongType{found: BDICT_TYPE_NAME, expected: expected}),
         }
     }
 
-    pub fn as_bstring_bytes(&self) -> Option<&'a [u8]> {
+    pub fn as_bstring_str(&self) -> Result<&'a str, ReadError> {
         match self {
-            &BVal::BString(s) => Some(s),
-            _ => None,
+            &BVal::BString(bs) => str::from_utf8(bs)
+                .or_else(|e| Err(ReadError::BadString(e))),
+            _ => self.report(BSTRING_TYPE_NAME),
         }
     }
 
-    pub fn as_bint(&self) -> Option<i64> {
+    pub fn as_bstring_bytes(&self) -> Result<&'a [u8], ReadError> {
         match self {
-            &BVal::BInt(i) => Some(i),
-            _ => None,
+            &BVal::BString(s) => Result::Ok(s),
+            _ => self.report(BSTRING_TYPE_NAME),
         }
     }
 
-    pub fn as_blist(&self) -> Option<&Vec<BVal<'a>>> {
+    pub fn as_bint(&self) -> Result<i64, ReadError> {
+        match self {
+            &BVal::BInt(i) => Result::Ok(i),
+            _ => self.report(BINT_TYPE_NAME),
+        }
+    }
+
+    pub fn as_blist(&self) -> Result<&Vec<BVal<'a>>, ReadError> {
         match *self {
-            BVal::BList(ref v) => Some(v),
-            _ => None,
+            BVal::BList(ref v) => Result::Ok(v),
+            _ => self.report(BLIST_TYPE_NAME),
         }
     }
 
-    pub fn as_bdict_ref(&self) -> Option<&HashMap<&'a str, BVal<'a>>> {
+    pub fn as_bdict_ref(&self) -> Result<&HashMap<&'a str, BVal<'a>>, ReadError> {
         match *self {
-            BVal::BDict(ref m) => Some(m),
-            _ => None,
+            BVal::BDict(ref m) => Result::Ok(m),
+            _ => self.report(BDICT_TYPE_NAME),
         }
     }
 
-    pub fn as_bdict(self) -> Option<HashMap<&'a str, BVal<'a>>> {
+    pub fn as_bdict(self) -> Result<HashMap<&'a str, BVal<'a>>, ReadError> {
         match self {
-            BVal::BDict(m) => Some(m),
-            _ => None,
+            BVal::BDict(m) => Result::Ok(m),
+            _ => self.report(BDICT_TYPE_NAME),
         }
     }
 }
@@ -59,9 +81,9 @@ impl <'a, 'b: 'a> BVal<'a> {
  * ===================
  * | BEncode Grammar |
  * ===================
- * 
+ *
  * bval ::= bstring | bint | blist | bdict
- * 
+ *
  * bstring ::= posnum ":" <posnum count of ascii bytes>
  *
  * bint ::= "i" num "e"
@@ -79,7 +101,7 @@ impl <'a, 'b: 'a> BVal<'a> {
 
 named!(pub bval<BVal>, alt!(bstring | bint | blist | bdict));
 
-named!(bstring_prelude<usize>, 
+named!(bstring_prelude<usize>,
        chain!(
            n: posnum ~
            tag!(":") ,
@@ -144,7 +166,7 @@ named!(keyvalpair<(&str, BVal)>,
        )
 );
 
-named!(posnum<usize>, 
+named!(posnum<usize>,
        map_res!(
            map_res!(take_while!(is_digit), str::from_utf8),
            FromStr::from_str
@@ -204,12 +226,12 @@ mod tests {
     fn option_variant() {
         assert_eq!(
             BVal::BString(&b"hello"[..]).as_bstring_str(),
-            Some("hello")
+            Ok("hello")
         );
 
         assert_eq!(
             BVal::BInt(10).as_bstring_str(),
-            None
+            Err(ReadError::WrongType{found: BINT_TYPE_NAME, expected: BSTRING_TYPE_NAME})
         );
     }
 }

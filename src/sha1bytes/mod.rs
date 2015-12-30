@@ -30,7 +30,7 @@ pub struct SHA1HashStepper<'a> {
 }
 impl <'a> Iterator for SHA1HashStepper<'a> {
     type Item = SHA1Hash<'a>;
-    
+
     fn next(&mut self) -> Option<SHA1Hash<'a>> {
         let p = self.pos;
         if self.view.len() <= p*20 {

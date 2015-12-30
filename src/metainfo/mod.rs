@@ -1,11 +1,14 @@
 use nom::IResult;
+use bencode;
 use bencode::{BVal, bdict};
 use sha1bytes::SHA1Hashes;
 
+use url;
 use url::Url;
 
 use std::path::PathBuf;
 use std::collections::HashMap;
+use std::result::Result;
 
 #[derive(Debug, PartialEq)]
 pub struct Metainfo<'a> {
@@ -35,113 +38,166 @@ pub struct File {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum InfoErr {
+pub enum InfoError {
     ExtraBytes,
     MissingBytes,
     BencodeParseError,
-    WrongBencode,
+    MissingKey(&'static str),
+    BencodeValError{for_key: &'static str, err: bencode::ReadError},
+    BadUrl(url::ParseError),
+    HashesNotMultiple20Bytes(usize),
 }
 
-pub fn parse(contents: &[u8]) -> Result<Metainfo, InfoErr> {
+static ROOT_KEY: &'static str = "_root_";
+static ANNOUNCE_KEY: &'static str = "announce";
+static INFO_KEY: &'static str = "info";
+static PIECE_LENGTH_KEY: &'static str = "piece length";
+static PIECES_KEY: &'static str = "pieces";
+static LENGTH_KEY: &'static str = "length";
+static NAME_KEY: &'static str = "name";
+static FILES_KEY: &'static str = "files";
+static PATH_KEY: &'static str = "path";
+
+pub fn parse(contents: &[u8]) -> Result<Metainfo, InfoError> {
     match bdict(contents) {
-        IResult::Done(rest, bv) => 
+        IResult::Done(rest, bv) =>
             if rest == &b""[..] {
-               metainfo_from_bval(bv).ok_or(InfoErr::WrongBencode)
+               metainfo_from_bval(bv)
             } else {
-               Result::Err(InfoErr::ExtraBytes)
+               Err(InfoError::ExtraBytes)
             },
-        IResult::Incomplete(_) => Result::Err(InfoErr::MissingBytes),
-        IResult::Error(_) => Result::Err(InfoErr::BencodeParseError),
+        IResult::Incomplete(_) => Err(InfoError::MissingBytes),
+        IResult::Error(_) => Err(InfoError::BencodeParseError),
     }
 }
 
-fn metainfo_from_bval<'a>(bv: BVal<'a>) -> Option<Metainfo> {
-    bv.as_bdict().and_then(|m| {
-        let announce_opt = m.get("announce")
-            .and_then(|a| a.as_bstring_str())
-            .and_then(|url_str| Url::parse(url_str).ok());
-        let info_opt = m.get("info")
-            .and_then(|i| i.as_bdict_ref())
+// TODO: Abstract the error checking more!
+fn metainfo_from_bval<'a>(bv: BVal<'a>) -> Result<Metainfo, InfoError> {
+    bv.as_bdict()
+        .or_else(|e| Err(InfoError::BencodeValError{for_key: ROOT_KEY, err: e}))
+        .and_then(|m| {
+        let announce_opt = m.get(ANNOUNCE_KEY)
+            .ok_or(InfoError::MissingKey(ANNOUNCE_KEY))
+            .and_then(|a| a.as_bstring_str()
+                      .or_else(|e| Err(InfoError::BencodeValError{for_key: ANNOUNCE_KEY, err: e})))
+            .and_then(|url_str| Url::parse(url_str)
+                      .or_else(|e| Err(InfoError::BadUrl(e))));
+        let info_opt = m.get(INFO_KEY)
+            .ok_or(InfoError::MissingKey(INFO_KEY))
+            .and_then(|i| i.as_bdict_ref()
+                      .or_else(|e| Err(InfoError::BencodeValError{for_key: INFO_KEY, err: e})))
             .and_then(|info_dict| info_from_dict(info_dict));
-        announce_opt.into_iter().zip(info_opt)
-            .map(|(announce, info)| Metainfo{ info: info, announce: announce })
-            .next()
+
+        // TODO: For paralellism, a zip here would be better
+        announce_opt.and_then(|announce| {
+            info_opt.map(|info| Metainfo{ info: info, announce: announce })
+        })
     })
 }
 
-fn info_from_dict<'a>(dict: &HashMap<&'a str, BVal<'a>>) -> Option<Info<'a>> {
-    let piece_length_opt = dict.get("piece_length")
-        .and_then(|p| p.as_bint());
-    let pieces_opt = dict.get("pieces")
-        .and_then(|ps| ps.as_bstring_bytes())
+fn info_from_dict<'a>(dict: &HashMap<&'a str, BVal<'a>>) -> Result<Info<'a>, InfoError> {
+    let piece_length_opt = dict.get(PIECE_LENGTH_KEY)
+        .ok_or(InfoError::MissingKey(PIECE_LENGTH_KEY))
+        .and_then(|p| p.as_bint()
+                       .or_else(|e| Err(InfoError::BencodeValError{for_key: PIECE_LENGTH_KEY, err: e})));
+    let pieces_opt = dict.get(PIECES_KEY)
+        .ok_or(InfoError::MissingKey(PIECES_KEY))
+        .and_then(|ps| ps.as_bstring_bytes()
+                         .or_else(|e| Err(InfoError::BencodeValError{for_key: PIECES_KEY, err: e})))
         .and_then(|sha_bytes| shas_from_bytes(sha_bytes));
     let mode_opt = mode_from_dict(dict);
 
-    piece_length_opt.into_iter()
-        .zip(pieces_opt.into_iter().zip(mode_opt).next())
-        .map(|(piece_length, (pieces, mode))| 
-             Info{ piece_length: piece_length, pieces: pieces, mode: mode })
-        .next()
+    // TODO: zip here
+    piece_length_opt.and_then(|piece_length| {
+        pieces_opt.and_then(|pieces| {
+            mode_opt.map(|mode| {
+              Info{ piece_length: piece_length, pieces: pieces, mode: mode }
+            })
+        })
+    })
 }
 
-fn shas_from_bytes<'a>(bytes: &'a [u8]) -> Option<SHA1Hashes<'a>> {
+fn shas_from_bytes<'a>(bytes: &'a [u8]) -> Result<SHA1Hashes<'a>, InfoError> {
     if bytes.len() % 20 != 0 {
-        None
+        Err(InfoError::HashesNotMultiple20Bytes(bytes.len()))
     } else {
-        Some(SHA1Hashes(bytes))
+        Ok(SHA1Hashes(bytes))
     }
 }
 
-fn mode_from_dict<'a>(dict: &HashMap<&'a str, BVal<'a>>) -> Option<Mode<'a>> {
-    let single_opt = dict.get("length").and_then(|l| l.as_bint())
+fn mode_from_dict<'a>(dict: &HashMap<&'a str, BVal<'a>>) -> Result<Mode<'a>, InfoError> {
+    let single_opt = dict.get(LENGTH_KEY)
+        .ok_or(InfoError::MissingKey(LENGTH_KEY))
+        .and_then(|l| l.as_bint()
+                       .or_else(|e| Err(InfoError::BencodeValError{for_key: LENGTH_KEY, err: e})))
         .and_then(|length| {
             // if there's length then it's single
-            dict.get("name")
-                .and_then(|s| s.as_bstring_str())
+            dict.get(NAME_KEY)
+                .ok_or(InfoError::MissingKey(NAME_KEY))
+                .and_then(|s| s.as_bstring_str()
+                               .or_else(|e| Err(InfoError::BencodeValError{for_key: NAME_KEY, err: e})))
                 .map(|name| Mode::Single{ name: name, length: length })
         });
 
     match single_opt {
-        Some(_) => single_opt,
-        None => {
+        Ok(_) => single_opt,
+        Err(_) => {
             // otherwise it's multi
-            let name_opt = dict.get("name")
-                .and_then(|s| s.as_bstring_str());
-            let files_opt: Option<Vec<File>> = dict.get("files")
-                .and_then(|fs| fs.as_blist())
-                .and_then(|file_dicts: &Vec<BVal<'a>>|
-                          file_dicts.iter()
-                                    .map(|fd_bval| fd_bval.as_bdict_ref())
-                                    .map(|file_dict_opt|
-                                         file_dict_opt.and_then(|file_dict| {
-                              let length_opt = file_dict.get("length")
-                                  .and_then(|l| l.as_bint());
-                              let path_opt = file_dict.get("path")
-                                  .and_then(|p| p.as_blist())
-                                  .and_then(|ps| components_to_path(ps));
+            let name_opt = dict.get(NAME_KEY)
+                .ok_or(InfoError::MissingKey(NAME_KEY))
+                .and_then(|s| s.as_bstring_str()
+                               .or_else(|e| Err(InfoError::BencodeValError{for_key: NAME_KEY, err: e})));
+            let files_opt: Result<Vec<File>, InfoError> = dict.get(FILES_KEY)
+                .ok_or(InfoError::MissingKey(FILES_KEY))
+                .and_then(|fs| fs.as_blist()
+                                 .or_else(|e| Err(InfoError::BencodeValError{for_key: FILES_KEY, err: e})))
+                .and_then(|file_dicts: &Vec<BVal<'a>>| {
+                    let collected: Result<Vec<File>, InfoError> =
+                    file_dicts.iter()
+                        .map(|fd_bval|
+                             fd_bval.as_bdict_ref()
+                             .or_else(|e| Err(InfoError::BencodeValError{for_key: FILES_KEY, err: e})))
+                        .map(|file_dict_opt|
+                             file_dict_opt.and_then(|file_dict| {
+                                 let length_opt = file_dict.get(LENGTH_KEY)
+                                 .ok_or(InfoError::MissingKey(LENGTH_KEY))
+                                 .and_then(|l| l.as_bint()
+                                           .or_else(|e| Err(InfoError::BencodeValError{for_key: LENGTH_KEY, err: e})));
+                             let path_opt = file_dict.get(PATH_KEY)
+                                 .ok_or(InfoError::MissingKey(PATH_KEY))
+                                 .and_then(|p| p.as_blist()
+                                           .or_else(|e| Err(InfoError::BencodeValError{for_key: PATH_KEY, err: e})))
+                                 .and_then(|ps| components_to_path(ps));
 
-                              length_opt.into_iter()
-                                        .zip(path_opt)
-                                        .map(|(length, path)| 
-                                             File{ length: length, path: path })
-                                        .next()
-                                    }))
-                                    .collect()
-                          );
-            name_opt.into_iter()
-                .zip(files_opt)
-                .map(|(name, files)| Mode::Multi{ name: name, files: files })
-                .next()
+                             // TODO: zip here
+                             length_opt.and_then(|length| {
+                                 path_opt.map(|path| {
+                                     File{ length: length, path: path }
+                                 })
+                             })
+                        }))
+                        .collect();
+
+                    collected
+                });
+            // TODO: zip here
+            name_opt.and_then(|name| {
+                files_opt.map(|files| {
+                    Mode::Multi{ name: name, files: files }
+                })
+            })
         },
     }
 }
 
-fn components_to_path<'a>(ps: &Vec<BVal<'a>>) -> Option<PathBuf> {
-    let maybe_vec: Option<Vec<&'a str>> = ps.into_iter()
-        .map(|component| component.as_bstring_str())
-        .collect();
+fn components_to_path<'a>(ps: &Vec<BVal<'a>>) -> Result<PathBuf, InfoError> {
+    let maybe_strs: Result<Vec<&'a str>, InfoError> =
+        ps.iter()
+          .map(|component| component.as_bstring_str()
+                                    .or_else(|e| Err(InfoError::BencodeValError{for_key: PATH_KEY, err: e})))
+          .collect();
 
-    maybe_vec.map(|strs| { 
+    maybe_strs.map(|strs| {
         strs.iter()
             .fold(PathBuf::new(), |mut acc, item| { acc.push(*item); acc })
     })
@@ -156,8 +212,8 @@ mod tests {
     fn parse_sample_torrent() {
         let bs = include_bytes!("../../nixos-sample.torrent");
         match parse(bs) {
-            Result::Ok(m) => println!("Metainfo: {:?}", m),
-            Result::Err(e) => panic!("Bad err: {:?}", e),
+            Ok(m) => panic!("Metainfo: {:?}", m),
+            Err(e) => panic!("Bad err: {:?}", e),
         }
     }
 }
