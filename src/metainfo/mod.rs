@@ -212,7 +212,7 @@ mod tests {
     fn parse_sample_torrent() {
         let bs = include_bytes!("../../nixos-sample.torrent");
         match parse(bs) {
-            Ok(m) => panic!("Metainfo: {:?}", m),
+            Ok(_) => return,
             Err(e) => panic!("Bad err: {:?}", e),
         }
     }
