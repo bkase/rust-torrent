@@ -1,5 +1,6 @@
 #[macro_use] extern crate nom;
 extern crate url;
+extern crate crypto;
 
 mod bencode;
 mod metainfo;

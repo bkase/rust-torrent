@@ -4,12 +4,14 @@ use std::result::Result;
 use std::collections::HashMap;
 use nom::{IResult, Needed, is_digit, Err};
 
+// TODO: Annotate all AST nodes with raw input?
 #[derive(Debug, PartialEq)]
 pub enum BVal<'a> {
     BString(&'a [u8]),
     BInt(i64),
     BList(Vec<BVal<'a>>),
-    BDict(HashMap<&'a str, BVal<'a>>),
+    // raw input as well
+    BDict(&'a [u8], HashMap<&'a str, BVal<'a>>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -29,7 +31,7 @@ impl <'a, 'b: 'a> BVal<'a> {
             &BVal::BString(_) => Err(ReadError::WrongType{found: BSTRING_TYPE_NAME, expected: expected}),
             &BVal::BInt(_) => Err(ReadError::WrongType{found: BINT_TYPE_NAME, expected: expected}),
             &BVal::BList(_) => Err(ReadError::WrongType{found: BLIST_TYPE_NAME, expected: expected}),
-            &BVal::BDict(_) => Err(ReadError::WrongType{found: BDICT_TYPE_NAME, expected: expected}),
+            &BVal::BDict(..) => Err(ReadError::WrongType{found: BDICT_TYPE_NAME, expected: expected}),
         }
     }
 
@@ -63,15 +65,19 @@ impl <'a, 'b: 'a> BVal<'a> {
     }
 
     pub fn as_bdict_ref(&self) -> Result<&HashMap<&'a str, BVal<'a>>, ReadError> {
+        self.as_bdict_ref_with_input().map(|(_, dict)| dict)
+    }
+
+    pub fn as_bdict_ref_with_input(&self) -> Result<(&[u8], &HashMap<&'a str, BVal<'a>>), ReadError> {
         match *self {
-            BVal::BDict(ref m) => Result::Ok(m),
+            BVal::BDict(input, ref m) => Result::Ok((input, m)),
             _ => self.report(BDICT_TYPE_NAME),
         }
     }
 
     pub fn as_bdict(self) -> Result<HashMap<&'a str, BVal<'a>>, ReadError> {
         match self {
-            BVal::BDict(m) => Result::Ok(m),
+            BVal::BDict(_, m) => Result::Ok(m),
             _ => self.report(BDICT_TYPE_NAME),
         }
     }
@@ -149,14 +155,34 @@ named!(pub blist<BVal>,
        )
 );
 
-named!(pub bdict<BVal>,
+// TODO: Make this work with a macro
+// `with_input_slice!(I->IResult<I,O>) -> I -> IResult<I,(I,O)> where I: Slice<T>`
+/*macro_rules! with_input_slice (
+    ($i:expr, $submac:ident!( $($args:tt)* )) => (
+        use nom::InputLength;
+        match submac!($i, $($args)*) {
+            nom::IResult::Error(e) => nom::IResult::Error(e),
+            nom::IResult::Incomplete(s) => nom::IResult::Incomplete(s),
+            nom::IResult::Done(i, o) =>
+                nom::IResult::Done(i, ( & $i[..(($i).input_len()-i.input_len()) ], o))
+        }
+    );
+);
+*/
+
+named!(bdict_hashmap< HashMap<&str, BVal> >,
        chain!(
            tag!("d") ~
            kvs: many0!(keyvalpair) ~
            tag!("e") ,
-           ||{ BVal::BDict(kvs.into_iter().collect()) }
+           ||{ kvs.into_iter().collect() }
        )
 );
+
+pub fn bdict(i: &[u8]) -> IResult<&[u8], BVal> {
+    let (rest, m) = try_parse!(i, bdict_hashmap);
+    IResult::Done(rest, BVal::BDict(&i[..i.len()-rest.len()], m))
+}
 
 named!(keyvalpair<(&str, BVal)>,
        chain!(
@@ -212,8 +238,10 @@ mod tests {
 
     #[test]
     fn bval_dict() {
-        assert_eq!(bval(&b"d3:key5:value4:key2i10ee"[..]), done(
+        let input = &b"d3:key5:value4:key2i10ee"[..];
+        assert_eq!(bval(input), done(
                 BVal::BDict(
+                    input,
                     vec![
                         ("key", BVal::BString(&b"value"[..])),
                         ("key2", BVal::BInt(10)),

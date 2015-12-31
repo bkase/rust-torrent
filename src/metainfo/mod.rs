@@ -1,7 +1,7 @@
 use nom::IResult;
 use bencode;
 use bencode::{BVal, bdict};
-use sha1bytes::SHA1Hashes;
+use sha1bytes::{SHA1Hash, SHA1Hashes};
 
 use url;
 use url::Url;
@@ -22,6 +22,8 @@ pub struct Info<'a> {
     piece_length: i64,
     pieces: SHA1Hashes<'a>,
     mode: Mode<'a>,
+    // used in torrent protocol
+    info_hash: SHA1Hash<'a>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -84,9 +86,9 @@ fn metainfo_from_bval<'a>(bv: BVal<'a>) -> Result<Metainfo, InfoError> {
                       .or_else(|e| Err(InfoError::BadUrl(e))));
         let info_opt = m.get(INFO_KEY)
             .ok_or(InfoError::MissingKey(INFO_KEY))
-            .and_then(|i| i.as_bdict_ref()
+            .and_then(|i| i.as_bdict_ref_with_input()
                       .or_else(|e| Err(InfoError::BencodeValError{for_key: INFO_KEY, err: e})))
-            .and_then(|info_dict| info_from_dict(info_dict));
+            .and_then(|(input, info_dict)| info_from_dict(input, info_dict));
 
         // TODO: For paralellism, a zip here would be better
         announce_opt.and_then(|announce| {
@@ -95,7 +97,7 @@ fn metainfo_from_bval<'a>(bv: BVal<'a>) -> Result<Metainfo, InfoError> {
     })
 }
 
-fn info_from_dict<'a>(dict: &HashMap<&'a str, BVal<'a>>) -> Result<Info<'a>, InfoError> {
+fn info_from_dict<'a>(input: &[u8], dict: &HashMap<&'a str, BVal<'a>>) -> Result<Info<'a>, InfoError> {
     let piece_length_opt = dict.get(PIECE_LENGTH_KEY)
         .ok_or(InfoError::MissingKey(PIECE_LENGTH_KEY))
         .and_then(|p| p.as_bint()
@@ -107,11 +109,13 @@ fn info_from_dict<'a>(dict: &HashMap<&'a str, BVal<'a>>) -> Result<Info<'a>, Inf
         .and_then(|sha_bytes| shas_from_bytes(sha_bytes));
     let mode_opt = mode_from_dict(dict);
 
+    let info_hash = SHA1Hash::from_bytes(input);
+
     // TODO: zip here
     piece_length_opt.and_then(|piece_length| {
         pieces_opt.and_then(|pieces| {
             mode_opt.map(|mode| {
-              Info{ piece_length: piece_length, pieces: pieces, mode: mode }
+              Info{ piece_length: piece_length, pieces: pieces, mode: mode, info_hash: info_hash }
             })
         })
     })
