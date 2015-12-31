@@ -22,12 +22,12 @@ impl <'a> SHA1Hash<'a> {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> SHA1Hash<'static> {
-        let mut out: [u8; 20] = unsafe{ mem::uninitialized() };
+        // TODO: Can we stack-allocate without zeroing?
+        let mut out: Vec<u8> = vec![0; 20];
         let mut hasher = Sha1::new();
         hasher.input(bytes);
         hasher.result(&mut out);
-        // TODO: Remove copy here
-        SHA1Hash(Cow::Owned(out.to_vec()))
+        SHA1Hash(Cow::Owned(out))
     }
 
     // from http://illegalargumentexception.blogspot.com/2015/05/rust-byte-array-to-hex-string.html
