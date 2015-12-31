@@ -1,8 +1,7 @@
 use std::iter;
-use std::mem;
 use std::fmt;
-use std::borrow::{Cow, ToOwned, Borrow};
-use std::iter::{Iterator, IntoIterator, ExactSizeIterator};
+use std::borrow::{Cow, Borrow};
+use std::iter::{Iterator, IntoIterator};
 use std::slice::Chunks;
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
@@ -38,7 +37,7 @@ impl <'a> SHA1Hash<'a> {
             .iter()
             .map(|b| format!("{:02X}", b))
             .collect();
-        strs.connect(" ")
+        strs.join(" ")
     }
 }
 
@@ -52,7 +51,7 @@ impl <'a> fmt::Debug for SHA1Hashes<'a> {
             .map(|h| format!("{:?}", h))
             .collect();
 
-        write!(f, "SHA1Hashes[{}]", strs.connect(",\n"))
+        write!(f, "SHA1Hashes[{}]", strs.join(",\n"))
     }
 }
 
