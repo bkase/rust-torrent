@@ -214,9 +214,9 @@ mod tests {
 
     #[test]
     fn parse_sample_torrent() {
-        let bs = include_bytes!("../../nixos-sample.torrent");
+        let bs = include_bytes!("../../sample.mp4.torrent");
         match parse(bs) {
-            Ok(_) => return,
+            Ok(m) => panic!("Good err: {:?}", m),
             Err(e) => panic!("Bad err: {:?}", e),
         }
     }
