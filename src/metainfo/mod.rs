@@ -10,11 +10,33 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 use std::result::Result;
 
+use std::net::ToSocketAddrs;
+
 #[derive(Debug, PartialEq)]
 pub struct Metainfo<'a> {
-    info: Info<'a>,
-    announce: Url,
+    pub info: Info<'a>,
+    pub announce: Url,
     // TODO: extensions
+}
+
+impl <'a> Metainfo<'a> {
+    pub fn total_size(&self) -> i64 {
+        match &self.info.mode {
+            &Mode::Single{ length, .. } => length,
+            &Mode::Multi{ ref files, .. } => 
+                files.iter().map(|f| f.length).fold(0, |a,b| a+b)
+        }
+    }
+
+    pub fn tracker_domain_port(&'a self) -> (&'a str, u16) {
+        let domain = self.announce.domain().unwrap();
+        let port = self.announce.port_or_default().unwrap_or(80);
+        (domain, port)
+    }
+
+    pub fn announce_path(&self) -> String {
+        return self.announce.path().map(|cs| cs.join("/")).unwrap_or("".to_string());
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -23,7 +45,7 @@ pub struct Info<'a> {
     pieces: SHA1Hashes<'a>,
     mode: Mode<'a>,
     // used in torrent protocol
-    info_hash: SHA1Hash<'a>,
+    pub info_hash: SHA1Hash<'a>,
 }
 
 #[derive(Debug, PartialEq)]

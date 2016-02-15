@@ -39,6 +39,16 @@ impl <'a> SHA1Hash<'a> {
             .collect();
         strs.join(" ")
     }
+
+    pub fn to_url_escaped_string(&self) -> String {
+        let &SHA1Hash(ref view) = self;
+        let borrowed: &[u8] = view.borrow();
+        let strs: Vec<String> = borrowed
+            .iter()
+            .map(|b| format!("%{:02X}", b))
+            .collect();
+        strs.join("")
+    }
 }
 
 // ASSERT: len(input) % 20 == 0
