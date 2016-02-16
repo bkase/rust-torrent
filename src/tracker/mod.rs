@@ -3,8 +3,7 @@ use std::net::Ipv4Addr;
 use std::collections::HashMap;
 use bencode;
 use bencode::{BVal, bdict};
-
-type Peer = (Ipv4Addr, u16);
+use peers as p;
 
 #[derive(Debug, PartialEq)]
 pub struct Announcement {
@@ -12,7 +11,7 @@ pub struct Announcement {
     downloaded: Option<i32>,
     incomplete: Option<i32>,
     interval: i32,
-    peers: Vec<Peer>,
+    peers: Vec<p::Peer>,
     // TODO: extensions
 }
 
@@ -73,7 +72,7 @@ fn announce_from_bval<'a>(bv: BVal<'a>) -> Result<Announcement, Error> {
                       if bs.len() % 6 != 0 {
                         Err(Error::BadPeerFormat)
                       } else {
-                          let peers: Vec<Peer> = bs.chunks(6)
+                          let peers: Vec<p::Peer> = bs.chunks(6)
                               .map(|chunk| {
                                   (Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]), 
                                      ((chunk[4] as u16) << 8) + chunk[5] as u16)
@@ -118,6 +117,9 @@ use rotor::{Scope};
 use time::{SteadyTime, Duration};
 use tracker;
 use metainfo;
+use sha1bytes;
+use rand;
+use rand::Rng;
 
 use rotor_http::client::{connect_tcp, Request, Head, Client, RecvMode};
 use rotor_http::client::{Context as HttpCtx};
@@ -178,11 +180,15 @@ impl Client for Req {
 }
 
 pub fn start_every_interval(mi: metainfo::Metainfo) {
+    let mut rand = rand::thread_rng();
+    let rand_id: Vec<u8> = rand.gen_iter::<u8>().take(20).collect();
+    let peer_id = sha1bytes::SHA1Hash::from_prehashed(&rand_id[..]).to_url_escaped_string();
+
     let path = mi.announce_path();
     let (domain, port) = mi.tracker_domain_port();
     let total_size = mi.total_size();
     let info_hash = mi.info.info_hash.to_url_escaped_string();
-    let fullpath = format!("/{}?info_hash={}&peer_id=%65%9F%7B%72%4E%E2%5C%8C%0D%0F%DC%5C%E5%30%AD%85%64%4A%AD%C0&port={}&uploaded=0&downloaded=0&left={}&numwant=7&event=started", path, info_hash, port, total_size);
+    let fullpath = format!("/{}?info_hash={}&peer_id={}&port={}&uploaded=0&downloaded=0&left={}&numwant=7&event=started", path, info_hash, peer_id, port, total_size);
 
     let event_loop = rotor::Loop::new(&rotor::Config::new()).unwrap();
     let addr = (domain, port).to_socket_addrs()

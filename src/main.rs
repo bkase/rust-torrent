@@ -6,6 +6,7 @@ extern crate rotor_stream;
 extern crate rotor_http;
 extern crate time;
 extern crate httparse;
+extern crate rand;
 
 mod bencode;
 mod metainfo;
